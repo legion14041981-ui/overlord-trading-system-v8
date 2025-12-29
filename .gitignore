@@ -1,0 +1,148 @@
+# .gitignore - Overlord v8.1
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+
+# === Virtual Environment ===
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# === Testing ===
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.pytest_cache/
+htmlcov/
+.hypothesis/
+
+# === Jupyter Notebook ===
+.ipynb_checkpoints
+*.ipynb
+
+# === Environment Variables ===
+.env
+.env.local
+.env.*.local
+*.env
+
+# === Secrets (НИКОГДА НЕ КОММИТИТЬ!) ===
+secrets/
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+credentials.json
+serviceaccount.json
+
+# === Terraform ===
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!terraform.tfvars.example
+crash.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# === Kubernetes ===
+kubeconfig
+*.kubeconfig
+kustomization.yaml
+
+# === Docker ===
+docker-compose.override.yml
+
+# === Logs ===
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# === Databases ===
+*.db
+*.sqlite
+*.sqlite3
+
+# === Backups ===
+backups/
+*.bak
+*.backup
+
+# === OS ===
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.Trash-*
+
+# === Temporary ===
+tmp/
+temp/
+*.tmp
+
+# === Build artifacts ===
+*.pyc
+*.pyo
+*.whl
+
+# === Monitoring & Profiling ===
+*.prof
+*.lprof
+.benchmarks/
+
+# === Security scans ===
+trivy-results.json
+bandit-report.json
+safety-report.json
+
+# === Generated files ===
+terraform-outputs.txt
+deployment-backup.yaml
