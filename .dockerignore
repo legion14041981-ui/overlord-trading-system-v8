@@ -1,0 +1,83 @@
+# .dockerignore - Overlord v8.1
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# CI/CD
+.github
+.gitlab
+.circleci
+
+# Documentation
+docs/
+*.md
+LICENSE
+
+# Tests
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Development
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+*.egg-info/
+
+# Environment
+.env
+.env.*
+*.env
+
+# Terraform
+terraform/
+*.tfstate
+*.tfvars
+
+# Kubernetes
+k8s/
+helm/
+*.yaml
+*.yml
+!alembic.ini
+
+# Monitoring
+monitoring/
+
+# Scripts (except entrypoint)
+scripts/
+!scripts/entrypoint.sh
+
+# Backups
+backups/
+*.bak
+
+# Logs
+logs/
+*.log
+
+# Temporary
+tmp/
+temp/
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+build/
+dist/
