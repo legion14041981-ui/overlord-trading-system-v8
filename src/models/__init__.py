@@ -159,4 +159,12 @@ __all__ = [
     "OrderSide",
     "OrderStatus",
     "PositionStatus",
+    "User",
+    "Strategy",
+    "Trade",
 ]
+
+# Import models
+from .user import User
+from .strategy import Strategy
+from .trade import Trade
