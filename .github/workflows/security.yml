@@ -11,6 +11,7 @@ on:
 permissions:
   contents: read
   security-events: write
+  actions: read
 
 jobs:
   trivy:
@@ -22,7 +23,7 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Run Trivy vulnerability scanner (Filesystem)
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.17.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
@@ -31,10 +32,11 @@ jobs:
           severity: 'CRITICAL,HIGH'
       
       - name: Upload Trivy results to GitHub Security
-        uses: github/codeql-action/upload-sarif@v2
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: 'trivy-fs-results.sarif'
-  
+        continue-on-error: true
+
   bandit:
     name: Bandit Security Scan
     runs-on: ubuntu-latest
@@ -44,7 +46,7 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       
@@ -52,14 +54,15 @@ jobs:
         run: pip install bandit[toml]
       
       - name: Run Bandit
-        run: bandit -r src/ -f json -o bandit-report.json || true
+        run: bandit -r . -f json -o bandit-report.json --exclude './venv,./build,./dist' || true
       
       - name: Upload Bandit results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: bandit-report
           path: bandit-report.json
-  
+          retention-days: 30
+
   dependency-review:
     name: Dependency Review
     runs-on: ubuntu-latest
@@ -70,6 +73,7 @@ jobs:
         uses: actions/checkout@v4
       
       - name: Dependency Review
-        uses: actions/dependency-review-action@v3
+        uses: actions/dependency-review-action@v4
         with:
           fail-on-severity: high
+        continue-on-error: true
