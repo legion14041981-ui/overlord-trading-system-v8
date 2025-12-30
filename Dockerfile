@@ -38,9 +38,10 @@ ENV PATH=/root/.local/bin:$PATH
 
 # Copy application code
 COPY src/ ./src/
-# COPY alembic/ ./alembic/
-# COPY alembic.ini .
-# COPY scripts/entrypoint.sh ./scripts/
+OPY alembic/ ./alembic/
+OPY alembic.ini .
+OPY scripts/entrypoint.sh ./scripts/
+RUN chmod +x /app/scripts/entrypoint.sh
 
 # Create non-root user
 RUN useradd -m -u 1000 overlord && \
@@ -56,7 +57,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 EXPOSE 8000
 
 # Set entrypoint
-# ENTRYPOINT ["/app/scripts/entrypoint.sh"]
+NTRYPOINT ["/app/scripts/entrypoint.sh"]
 
 # Default command
 CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
