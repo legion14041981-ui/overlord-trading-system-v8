@@ -38,9 +38,9 @@ ENV PATH=/root/.local/bin:$PATH
 
 # Copy application code
 COPY src/ ./src/
-OPY alembic/ ./alembic/
-OPY alembic.ini .
-OPY scripts/entrypoint.sh ./scripts/
+COPY alembic/ ./alembic/
+COPY alembic.ini .
+COPY scripts/entrypoint.sh ./scripts/
 RUN chmod +x /app/scripts/entrypoint.sh
 
 # Create non-root user
