@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.database import engine, Base
-from src.routers import users_router, strategies_router, trades_router
+from src.routers import users_router, strategies_router, trades_router, auth_router
 
 # Configure logging
 logging.basicConfig(
@@ -60,6 +60,7 @@ app.add_middleware(
 )
 
 # Register API routers
+app.include_router(auth_router, prefix="/api/v1")
 app.include_router(users_router, prefix="/api/v1")
 app.include_router(strategies_router, prefix="/api/v1")
 app.include_router(trades_router, prefix="/api/v1")
