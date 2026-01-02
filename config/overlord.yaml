@@ -1,0 +1,113 @@
+# Overlord Trading System v9 Configuration
+# Production-ready example with Binance and Coinbase
+
+system:
+  mode: standard
+  environment: production
+  log_level: INFO
+  max_concurrent_orders: 100
+  heartbeat_interval: 5
+  enable_telemetry: true
+
+data_sources:
+  # Binance Spot
+  - name: binance
+    enabled: true
+    venue_type: spot
+    api_key: ${BINANCE_API_KEY}
+    api_secret: ${BINANCE_API_SECRET}
+    base_url: https://api.binance.com
+    websocket_url: wss://stream.binance.com:9443/ws
+    max_requests_per_minute: 1200
+    timeout: 30
+    retry_attempts: 3
+    symbols:
+      - BTCUSDT
+      - ETHUSDT
+      - BNBUSDT
+      - SOLUSDT
+      - ADAUSDT
+  
+  # Coinbase Pro
+  - name: coinbase
+    enabled: true
+    venue_type: spot
+    api_key: ${COINBASE_API_KEY}
+    api_secret: ${COINBASE_API_SECRET}
+    base_url: https://api.exchange.coinbase.com
+    websocket_url: wss://ws-feed.exchange.coinbase.com
+    max_requests_per_minute: 600
+    timeout: 30
+    retry_attempts: 3
+    symbols:
+      - BTC-USD
+      - ETH-USD
+      - SOL-USD
+
+strategies:
+  # Momentum Trading Strategy
+  - name: momentum_trader
+    strategy_type: momentum
+    enabled: true
+    capital_allocation: 0.4
+    symbols:
+      - BTCUSDT
+      - ETHUSDT
+    venues:
+      - binance
+    risk_limits:
+      max_drawdown: 0.15
+      max_position_size: 0.1
+      max_leverage: 1
+      var_threshold_95: 0.05
+      liquidity_ratio_min: 2.0
+      correlation_threshold: 0.9
+      daily_loss_limit: 5000
+      position_concentration_limit: 0.25
+    parameters:
+      lookback_period: 20
+      momentum_threshold: 0.02
+      entry_signal_strength: 0.7
+      exit_signal_strength: 0.3
+    entry_conditions:
+      price_momentum: ">= 0.02"
+      volume_surge: ">= 1.5"
+      rsi: "< 70"
+    exit_conditions:
+      take_profit: 0.05
+      stop_loss: 0.03
+      trailing_stop: 0.02
+  
+  # Mean Reversion Strategy
+  - name: mean_reversion_btc
+    strategy_type: mean_reversion
+    enabled: true
+    capital_allocation: 0.3
+    symbols:
+      - BTCUSDT
+    venues:
+      - binance
+    risk_limits:
+      max_drawdown: 0.10
+      max_position_size: 0.15
+      max_leverage: 1
+      var_threshold_95: 0.04
+      liquidity_ratio_min: 2.5
+    parameters:
+      lookback_period: 50
+      std_dev_threshold: 2.0
+      mean_window: 20
+    entry_conditions:
+      z_score: "<= -2.0 or >= 2.0"
+      bollinger_position: "outside_bands"
+    exit_conditions:
+      z_score_return: "between -0.5 and 0.5"
+      max_holding_period: 86400  # 24 hours in seconds
+
+execution:
+  mode: smart_routing
+  slippage_tolerance: 0.001  # 0.1%
+  timeout: 30
+  enable_partial_fills: true
+  min_fill_percentage: 0.5
+  max_order_age: 3600  # 1 hour
