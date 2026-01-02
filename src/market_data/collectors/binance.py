@@ -1,250 +1,222 @@
-"""Binance exchange collector implementation."""
+"""Binance market data collector."""
 import asyncio
-import aiohttp
-from typing import List, Optional
-from datetime import datetime
+import hmac
+import hashlib
+import time
+from typing import List, Optional, Dict, Any
+from datetime import datetime, timezone
 from decimal import Decimal
+import aiohttp
 import json
 
 from .base import BaseCollector
-from ..models import Quote, Trade, OHLCV, OrderBook
-from ...core.logging.structured_logger import get_logger
-
-
-logger = get_logger(__name__)
+from ...core.models import Quote, Trade, OHLCV
+from ..adapters.http_adapter import HTTPAdapter
+from ..adapters.ws_adapter import WebSocketAdapter
 
 
 class BinanceCollector(BaseCollector):
-    """Binance spot market data collector."""
+    """Binance Spot market data collector."""
     
-    BASE_URL = "https://api.binance.com/api"
-    WS_URL = "wss://stream.binance.com:9443/ws"
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("binance", config)
+        self.base_url = config.get('base_url', 'https://api.binance.com')
+        self.ws_url = config.get('websocket_url', 'wss://stream.binance.com:9443/ws')
+        self.api_key = config.get('api_key')
+        self.api_secret = config.get('api_secret')
+        
+        self.http = HTTPAdapter(
+            base_url=self.base_url,
+            timeout=config.get('timeout', 30),
+            max_retries=config.get('retry_attempts', 3)
+        )
+        self.ws: Optional[WebSocketAdapter] = None
+        self._subscribed_symbols: List[str] = []
     
-    def __init__(self, name: str, symbols: List[str], 
-                 api_key: Optional[str] = None, api_secret: Optional[str] = None):
-        super().__init__(name, "binance", symbols, api_key, api_secret)
-        self.session: Optional[aiohttp.ClientSession] = None
-        self.ws_connection = None
-        self._subscribe_streams = []
-    
-    async def connect(self) -> bool:
+    async def connect(self) -> None:
         """Connect to Binance API."""
         try:
-            self.session = aiohttp.ClientSession()
+            # Test REST API connectivity
+            response = await self.http.get('/api/v3/ping')
             
-            # Test connection
-            async with self.session.get(f"{self.BASE_URL}/v3/ping") as resp:
-                if resp.status == 200:
-                    self.is_connected = True
-                    logger.info(
-                        "Binance collector connected",
-                        context={"venue": "binance", "symbols": len(self.symbols)}
-                    )
-                    self._reset_error_count()
-                    return True
+            # Initialize WebSocket
+            self.ws = WebSocketAdapter(
+                url=self.ws_url,
+                on_message=self._handle_ws_message,
+                on_error=self._handle_ws_error,
+                on_close=self._handle_ws_close
+            )
+            await self.ws.connect()
+            
+            self._connected = True
+            self.logger.info("Connected to Binance", {
+                "base_url": self.base_url,
+                "ws_url": self.ws_url
+            })
         except Exception as e:
-            await self._handle_error(e)
-            return False
+            self.logger.error("Failed to connect to Binance", error=e)
+            raise
     
     async def disconnect(self) -> None:
         """Disconnect from Binance."""
-        try:
-            if self.ws_connection:
-                await self.ws_connection.close()
-            if self.session:
-                await self.session.close()
-            self.is_connected = False
-            logger.info("Binance collector disconnected", context={"venue": "binance"})
-        except Exception as e:
-            logger.error("Error disconnecting from Binance", error=e)
+        if self.ws:
+            await self.ws.disconnect()
+        await self.http.close()
+        self._connected = False
+        self.logger.info("Disconnected from Binance")
     
-    async def subscribe_quotes(self, symbols: Optional[List[str]] = None) -> None:
-        """Subscribe to bid/ask updates."""
-        symbols = symbols or self.symbols
-        streams = [f"{symbol.lower()}@bookTicker" for symbol in symbols]
-        self._subscribe_streams.extend(streams)
-        await self._connect_websocket()
+    async def subscribe_quotes(self, symbols: List[str]) -> None:
+        """Subscribe to book ticker (best bid/ask) updates."""
+        streams = [f"{s.lower()}@bookTicker" for s in symbols]
+        subscribe_msg = {
+            "method": "SUBSCRIBE",
+            "params": streams,
+            "id": int(time.time() * 1000)
+        }
+        
+        if self.ws:
+            await self.ws.send(json.dumps(subscribe_msg))
+            self._subscribed_symbols.extend(symbols)
+            self.logger.info("Subscribed to quote streams", {
+                "symbols": symbols,
+                "streams": streams
+            })
     
-    async def subscribe_trades(self, symbols: Optional[List[str]] = None) -> None:
+    async def subscribe_trades(self, symbols: List[str]) -> None:
         """Subscribe to trade stream."""
-        symbols = symbols or self.symbols
-        streams = [f"{symbol.lower()}@trade" for symbol in symbols]
-        self._subscribe_streams.extend(streams)
-        await self._connect_websocket()
-    
-    async def subscribe_orderbook(self, symbols: Optional[List[str]] = None,
-                                  depth: int = 20) -> None:
-        """Subscribe to order book updates."""
-        symbols = symbols or self.symbols
-        valid_depths = [5, 10, 20, 50, 100, 500, 1000]
-        depth = min(valid_depths, key=lambda x: abs(x - depth))
-        streams = [f"{symbol.lower()}@depth{depth}@100ms" for symbol in symbols]
-        self._subscribe_streams.extend(streams)
-        await self._connect_websocket()
-    
-    async def _connect_websocket(self) -> None:
-        """Establish WebSocket connection."""
-        try:
-            stream_url = f"{self.WS_URL}/{'/'.join(self._subscribe_streams)}"
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.ws_connect(stream_url) as ws:
-                    self.ws_connection = ws
-                    logger.info(
-                        "Binance WebSocket connected",
-                        context={"venue": "binance", "streams": len(self._subscribe_streams)}
-                    )
-                    
-                    async for msg in ws:
-                        if msg.type == aiohttp.WSMsgType.TEXT:
-                            await self._process_message(json.loads(msg.data))
-                        elif msg.type in [aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR]:
-                            break
-        except Exception as e:
-            await self._handle_error(e)
-    
-    async def _process_message(self, data: dict) -> None:
-        """Process incoming WebSocket message."""
-        try:
-            stream = data.get('stream', '')
-            payload = data.get('data', {})
-            
-            if 'bookTicker' in stream:
-                quote = self._parse_quote(payload)
-                if quote:
-                    await self._emit_data(quote)
-                    self._reset_error_count()
-            
-            elif '@trade' in stream:
-                trade = self._parse_trade(payload)
-                if trade:
-                    await self._emit_data(trade)
-                    self._reset_error_count()
-            
-            elif '@depth' in stream:
-                orderbook = self._parse_orderbook(payload, stream)
-                if orderbook:
-                    await self._emit_data(orderbook)
-                    self._reset_error_count()
+        streams = [f"{s.lower()}@trade" for s in symbols]
+        subscribe_msg = {
+            "method": "SUBSCRIBE",
+            "params": streams,
+            "id": int(time.time() * 1000)
+        }
         
-        except Exception as e:
-            logger.error("Error processing Binance message", error=e)
+        if self.ws:
+            await self.ws.send(json.dumps(subscribe_msg))
+            self.logger.info("Subscribed to trade streams", {
+                "symbols": symbols,
+                "streams": streams
+            })
     
-    def _parse_quote(self, data: dict) -> Optional[Quote]:
-        """Parse quote from Binance ticker format."""
-        try:
-            return Quote(
-                symbol=data.get('s', ''),
-                venue="binance",
-                timestamp=datetime.fromtimestamp(data.get('E', 0) / 1000),
-                bid_price=Decimal(data.get('b', '0')),
-                bid_size=Decimal(data.get('B', '0')),
-                ask_price=Decimal(data.get('a', '0')),
-                ask_size=Decimal(data.get('A', '0'))
-            )
-        except Exception as e:
-            logger.error("Error parsing quote", error=e)
-            return None
-    
-    def _parse_trade(self, data: dict) -> Optional[Trade]:
-        """Parse trade from Binance trade format."""
-        try:
-            return Trade(
-                trade_id=str(data.get('t', '')),
-                symbol=data.get('s', ''),
-                venue="binance",
-                timestamp=datetime.fromtimestamp(data.get('T', 0) / 1000),
-                price=Decimal(data.get('p', '0')),
-                quantity=Decimal(data.get('q', '0')),
-                side="buy" if data.get('m') else "sell"
-            )
-        except Exception as e:
-            logger.error("Error parsing trade", error=e)
-            return None
-    
-    def _parse_orderbook(self, data: dict, stream: str) -> Optional[OrderBook]:
-        """Parse order book from Binance depth format."""
-        try:
-            symbol = stream.split('@')[0].upper()
-            bids = [(Decimal(p), Decimal(q)) for p, q in data.get('bids', [])]
-            asks = [(Decimal(p), Decimal(q)) for p, q in data.get('asks', [])]
-            
-            return OrderBook(
-                symbol=symbol,
-                venue="binance",
-                timestamp=datetime.fromtimestamp(data.get('E', 0) / 1000),
-                bids=bids,
-                asks=asks
-            )
-        except Exception as e:
-            logger.error("Error parsing orderbook", error=e)
-            return None
-    
-    async def get_ohlcv(self, symbol: str, interval: str,
-                       start: Optional[datetime] = None,
-                       end: Optional[datetime] = None) -> List[OHLCV]:
-        """Fetch historical OHLCV data."""
-        if not self.session:
-            return []
+    async def fetch_ohlcv(self, symbol: str, interval: str,
+                          start: Optional[datetime] = None,
+                          end: Optional[datetime] = None,
+                          limit: int = 1000) -> List[OHLCV]:
+        """Fetch kline/candlestick data."""
+        params = {
+            'symbol': symbol,
+            'interval': self._convert_interval(interval),
+            'limit': min(limit, 1000)
+        }
+        
+        if start:
+            params['startTime'] = int(start.timestamp() * 1000)
+        if end:
+            params['endTime'] = int(end.timestamp() * 1000)
         
         try:
-            url = f"{self.BASE_URL}/v3/klines"
-            params = {
+            data = await self.http.get('/api/v3/klines', params=params)
+            
+            ohlcvs = []
+            for candle in data:
+                ohlcvs.append(OHLCV(
+                    symbol=symbol,
+                    venue="binance",
+                    interval=interval,
+                    timestamp=datetime.fromtimestamp(candle[0] / 1000, tz=timezone.utc),
+                    open=Decimal(str(candle[1])),
+                    high=Decimal(str(candle[2])),
+                    low=Decimal(str(candle[3])),
+                    close=Decimal(str(candle[4])),
+                    volume=Decimal(str(candle[5])),
+                    quote_volume=Decimal(str(candle[7])),
+                    trades_count=int(candle[8])
+                ))
+            
+            self.logger.debug(f"Fetched {len(ohlcvs)} OHLCV candles", {
+                "symbol": symbol,
+                "interval": interval
+            })
+            
+            return ohlcvs
+        except Exception as e:
+            self.logger.error("Failed to fetch OHLCV", error=e, context={
+                "symbol": symbol,
+                "interval": interval
+            })
+            raise
+    
+    async def fetch_order_book(self, symbol: str, depth: int = 10) -> Dict[str, Any]:
+        """Fetch order book snapshot."""
+        params = {'symbol': symbol, 'limit': depth}
+        
+        try:
+            data = await self.http.get('/api/v3/depth', params=params)
+            return {
                 'symbol': symbol,
-                'interval': interval,
-                'limit': 1000
+                'venue': 'binance',
+                'timestamp': datetime.now(timezone.utc),
+                'bids': [[Decimal(p), Decimal(q)] for p, q in data['bids']],
+                'asks': [[Decimal(p), Decimal(q)] for p, q in data['asks']]
             }
-            
-            if start:
-                params['startTime'] = int(start.timestamp() * 1000)
-            if end:
-                params['endTime'] = int(end.timestamp() * 1000)
-            
-            async with self.session.get(url, params=params) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return [self._parse_kline(kline, symbol) for kline in data]
         except Exception as e:
-            logger.error("Error fetching OHLCV", error=e)
-        
-        return []
+            self.logger.error("Failed to fetch order book", error=e, context={
+                "symbol": symbol
+            })
+            raise
     
-    def _parse_kline(self, kline: list, symbol: str) -> OHLCV:
-        """Parse OHLCV from Binance kline format."""
-        return OHLCV(
-            symbol=symbol,
-            venue="binance",
-            timestamp=datetime.fromtimestamp(kline[0] / 1000),
-            open=Decimal(str(kline[1])),
-            high=Decimal(str(kline[2])),
-            low=Decimal(str(kline[3])),
-            close=Decimal(str(kline[4])),
-            volume=Decimal(str(kline[7]))
-        )
-    
-    async def get_order_book(self, symbol: str, depth: int = 20) -> OrderBook:
-        """Get current order book snapshot."""
-        if not self.session:
-            return OrderBook(symbol=symbol, venue="binance", bids=[], asks=[])
-        
+    async def _handle_ws_message(self, message: str) -> None:
+        """Handle WebSocket messages."""
         try:
-            url = f"{self.BASE_URL}/v3/depth"
-            params = {'symbol': symbol, 'limit': min(depth, 5000)}
+            data = json.loads(message)
             
-            async with self.session.get(url, params=params) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    bids = [(Decimal(p), Decimal(q)) for p, q in data.get('bids', [])]
-                    asks = [(Decimal(p), Decimal(q)) for p, q in data.get('asks', [])]
-                    
-                    return OrderBook(
-                        symbol=symbol,
-                        venue="binance",
-                        timestamp=datetime.utcnow(),
-                        bids=bids,
-                        asks=asks
-                    )
-        except Exception as e:
-            logger.error("Error fetching order book", error=e)
+            # Book ticker (quotes)
+            if 'e' in data and data['e'] == 'bookTicker':
+                quote = Quote(
+                    symbol=data['s'],
+                    venue="binance",
+                    timestamp=datetime.fromtimestamp(data['E'] / 1000, tz=timezone.utc),
+                    bid_price=Decimal(data['b']),
+                    bid_size=Decimal(data['B']),
+                    ask_price=Decimal(data['a']),
+                    ask_size=Decimal(data['A'])
+                )
+                await self._emit_quote(quote)
+            
+            # Trade stream
+            elif 'e' in data and data['e'] == 'trade':
+                trade = Trade(
+                    trade_id=str(data['t']),
+                    symbol=data['s'],
+                    venue="binance",
+                    timestamp=datetime.fromtimestamp(data['T'] / 1000, tz=timezone.utc),
+                    side="buy" if data['m'] else "sell",
+                    price=Decimal(data['p']),
+                    quantity=Decimal(data['q'])
+                )
+                await self._emit_trade(trade)
         
-        return OrderBook(symbol=symbol, venue="binance", bids=[], asks=[])
+        except Exception as e:
+            self.logger.error("Error processing WebSocket message", error=e, context={
+                "message": message[:200]
+            })
+    
+    async def _handle_ws_error(self, error: Exception) -> None:
+        """Handle WebSocket errors."""
+        self.logger.error("WebSocket error", error=error)
+        self._connected = False
+        await self._reconnect_loop()
+    
+    async def _handle_ws_close(self) -> None:
+        """Handle WebSocket closure."""
+        self.logger.warning("WebSocket connection closed")
+        self._connected = False
+        await self._reconnect_loop()
+    
+    def _convert_interval(self, interval: str) -> str:
+        """Convert standard interval to Binance format."""
+        mapping = {
+            '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m',
+            '1h': '1h', '4h': '4h', '1d': '1d', '1w': '1w'
+        }
+        return mapping.get(interval, '1m')

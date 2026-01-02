@@ -1,280 +1,231 @@
-"""Bybit exchange collector implementation."""
+"""Bybit market data collector."""
 import asyncio
-import aiohttp
-import json
-from typing import List, Optional
-from datetime import datetime
+import hmac
+import hashlib
+import time
+from typing import List, Optional, Dict, Any
+from datetime import datetime, timezone
 from decimal import Decimal
+import json
 
 from .base import BaseCollector
-from ..models import Quote, Trade, OHLCV, OrderBook
-from ...core.logging.structured_logger import get_logger
-
-
-logger = get_logger(__name__)
+from ...core.models import Quote, Trade, OHLCV
+from ..adapters.http_adapter import HTTPAdapter
+from ..adapters.ws_adapter import WebSocketAdapter
 
 
 class BybitCollector(BaseCollector):
-    """Bybit exchange collector for spot and derivatives."""
+    """Bybit Spot market data collector."""
     
-    BASE_URL = "https://api.bybit.com"
-    WS_URL = "wss://stream.bybit.com/v5/public/spot"
-    WS_URL_PERP = "wss://stream.bybit.com/v5/public/linear"
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__("bybit", config)
+        self.base_url = config.get('base_url', 'https://api.bybit.com')
+        self.ws_url = config.get('websocket_url', 'wss://stream.bybit.com/v5/public/spot')
+        self.api_key = config.get('api_key')
+        self.api_secret = config.get('api_secret')
+        
+        self.http = HTTPAdapter(
+            base_url=self.base_url,
+            timeout=config.get('timeout', 30),
+            max_retries=config.get('retry_attempts', 3)
+        )
+        self.ws: Optional[WebSocketAdapter] = None
+        self._subscribed_symbols: List[str] = []
     
-    def __init__(self, name: str, symbols: List[str],
-                 api_key: Optional[str] = None, api_secret: Optional[str] = None,
-                 market_type: str = "spot"):
-        super().__init__(name, "bybit", symbols, api_key, api_secret)
-        self.market_type = market_type  # 'spot' or 'linear' (perpetual)
-        self.session: Optional[aiohttp.ClientSession] = None
-        self.ws_connection = None
-    
-    async def connect(self) -> bool:
+    async def connect(self) -> None:
         """Connect to Bybit API."""
         try:
-            self.session = aiohttp.ClientSession()
+            # Test REST API connectivity
+            response = await self.http.get('/v5/market/time')
             
-            # Test connection
-            async with self.session.get(f"{self.BASE_URL}/v5/market/time") as resp:
-                if resp.status == 200:
-                    self.is_connected = True
-                    logger.info(
-                        "Bybit collector connected",
-                        context={"venue": "bybit", "market_type": self.market_type, "symbols": len(self.symbols)}
-                    )
-                    self._reset_error_count()
-                    return True
+            # Initialize WebSocket
+            self.ws = WebSocketAdapter(
+                url=self.ws_url,
+                on_message=self._handle_ws_message,
+                on_error=self._handle_ws_error,
+                on_close=self._handle_ws_close
+            )
+            await self.ws.connect()
+            
+            self._connected = True
+            self.logger.info("Connected to Bybit", {
+                "base_url": self.base_url,
+                "ws_url": self.ws_url
+            })
         except Exception as e:
-            await self._handle_error(e)
-            return False
+            self.logger.error("Failed to connect to Bybit", error=e)
+            raise
     
     async def disconnect(self) -> None:
         """Disconnect from Bybit."""
-        try:
-            if self.ws_connection:
-                await self.ws_connection.close()
-            if self.session:
-                await self.session.close()
-            self.is_connected = False
-            logger.info("Bybit collector disconnected", context={"venue": "bybit"})
-        except Exception as e:
-            logger.error("Error disconnecting from Bybit", error=e)
+        if self.ws:
+            await self.ws.disconnect()
+        await self.http.close()
+        self._connected = False
+        self.logger.info("Disconnected from Bybit")
     
-    async def subscribe_quotes(self, symbols: Optional[List[str]] = None) -> None:
-        """Subscribe to ticker (quote) updates."""
-        symbols = symbols or self.symbols
-        await self._subscribe_websocket(symbols, "tickers")
-    
-    async def subscribe_trades(self, symbols: Optional[List[str]] = None) -> None:
-        """Subscribe to trade stream."""
-        symbols = symbols or self.symbols
-        await self._subscribe_websocket(symbols, "trades")
-    
-    async def subscribe_orderbook(self, symbols: Optional[List[str]] = None,
-                                  depth: int = 20) -> None:
-        """Subscribe to order book updates."""
-        symbols = symbols or self.symbols
-        depth_str = f"orderbook.{min(depth, 500)}"
-        await self._subscribe_websocket(symbols, [depth_str])
-    
-    async def _subscribe_websocket(self, symbols: List[str], channels: List[str] | str) -> None:
-        """Connect to WebSocket and subscribe to channels."""
-        try:
-            ws_url = self.WS_URL_PERP if self.market_type == "linear" else self.WS_URL
-            channels = [channels] if isinstance(channels, str) else channels
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.ws_connect(ws_url) as ws:
-                    self.ws_connection = ws
-                    
-                    for symbol in symbols:
-                        for channel in channels:
-                            subscribe_msg = {
-                                "op": "subscribe",
-                                "args": [f"{channel}.{symbol}"]
-                            }
-                            await ws.send_json(subscribe_msg)
-                    
-                    logger.info(
-                        "Bybit WebSocket subscribed",
-                        context={"venue": "bybit", "symbols": len(symbols), "channels": channels}
-                    )
-                    
-                    async for msg in ws:
-                        if msg.type == aiohttp.WSMsgType.TEXT:
-                            await self._process_message(json.loads(msg.data))
-                        elif msg.type in [aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR]:
-                            break
-        except Exception as e:
-            await self._handle_error(e)
-    
-    async def _process_message(self, data: dict) -> None:
-        """Process incoming WebSocket message."""
-        try:
-            topic = data.get('topic', '')
-            
-            if 'tickers' in topic:
-                quote = self._parse_ticker(data)
-                if quote:
-                    await self._emit_data(quote)
-                    self._reset_error_count()
-            
-            elif 'trades' in topic:
-                trades = self._parse_trades(data)
-                for trade in trades:
-                    if trade:
-                        await self._emit_data(trade)
-                self._reset_error_count()
-            
-            elif 'orderbook' in topic:
-                orderbook = self._parse_orderbook(data)
-                if orderbook:
-                    await self._emit_data(orderbook)
-                    self._reset_error_count()
+    async def subscribe_quotes(self, symbols: List[str]) -> None:
+        """Subscribe to book ticker updates."""
+        for symbol in symbols:
+            subscribe_msg = {
+                "op": "subscribe",
+                "args": [f"bookticker.{symbol}"]
+            }
+            if self.ws:
+                await self.ws.send(json.dumps(subscribe_msg))
         
-        except Exception as e:
-            logger.error("Error processing Bybit message", error=e)
+        self._subscribed_symbols.extend(symbols)
+        self.logger.info("Subscribed to book ticker", {
+            "symbols": symbols
+        })
     
-    def _parse_ticker(self, data: dict) -> Optional[Quote]:
-        """Parse quote from Bybit ticker."""
+    async def subscribe_trades(self, symbols: List[str]) -> None:
+        """Subscribe to public trades."""
+        for symbol in symbols:
+            subscribe_msg = {
+                "op": "subscribe",
+                "args": [f"publicTrade.{symbol}"]
+            }
+            if self.ws:
+                await self.ws.send(json.dumps(subscribe_msg))
+        
+        self.logger.info("Subscribed to public trades", {
+            "symbols": symbols
+        })
+    
+    async def fetch_ohlcv(self, symbol: str, interval: str,
+                          start: Optional[datetime] = None,
+                          end: Optional[datetime] = None,
+                          limit: int = 1000) -> List[OHLCV]:
+        """Fetch kline data."""
+        params = {
+            'category': 'spot',
+            'symbol': symbol,
+            'interval': self._convert_interval(interval),
+            'limit': min(limit, 1000)
+        }
+        
+        if start:
+            params['start'] = int(start.timestamp() * 1000)
+        if end:
+            params['end'] = int(end.timestamp() * 1000)
+        
         try:
-            ticker_data = data.get('data', {})
-            symbol = data.get('topic', '').split('.')[-1]
+            response = await self.http.get('/v5/market/kline', params=params)
+            data = response.get('result', {}).get('list', [])
             
-            return Quote(
-                symbol=symbol,
-                venue="bybit",
-                timestamp=datetime.fromtimestamp(int(data.get('ts', 0)) / 1000),
-                bid_price=Decimal(ticker_data.get('bid1Price', '0')),
-                bid_size=Decimal(ticker_data.get('bid1Size', '0')),
-                ask_price=Decimal(ticker_data.get('ask1Price', '0')),
-                ask_size=Decimal(ticker_data.get('ask1Size', '0'))
-            )
-        except Exception as e:
-            logger.error("Error parsing Bybit ticker", error=e)
-            return None
-    
-    def _parse_trades(self, data: dict) -> List[Optional[Trade]]:
-        """Parse trades from Bybit trade stream."""
-        trades = []
-        try:
-            symbol = data.get('topic', '').split('.')[-1]
-            for trade_data in data.get('data', []):
-                trade = Trade(
-                    trade_id=str(trade_data.get('execId', '')),
+            ohlcvs = []
+            for candle in data:
+                ohlcvs.append(OHLCV(
                     symbol=symbol,
                     venue="bybit",
-                    timestamp=datetime.fromtimestamp(int(trade_data.get('time', 0)) / 1000),
-                    price=Decimal(trade_data.get('price', '0')),
-                    quantity=Decimal(trade_data.get('size', '0')),
-                    side=trade_data.get('side', 'buy')
-                )
-                trades.append(trade)
+                    interval=interval,
+                    timestamp=datetime.fromtimestamp(int(candle[0]) / 1000, tz=timezone.utc),
+                    open=Decimal(candle[1]),
+                    high=Decimal(candle[2]),
+                    low=Decimal(candle[3]),
+                    close=Decimal(candle[4]),
+                    volume=Decimal(candle[5]),
+                    quote_volume=Decimal(candle[6]),
+                    trades_count=None
+                ))
+            
+            # Bybit returns newest first, reverse for chronological order
+            ohlcvs.reverse()
+            
+            self.logger.debug(f"Fetched {len(ohlcvs)} OHLCV candles", {
+                "symbol": symbol,
+                "interval": interval
+            })
+            
+            return ohlcvs
         except Exception as e:
-            logger.error("Error parsing Bybit trades", error=e)
-        
-        return trades
+            self.logger.error("Failed to fetch OHLCV", error=e, context={
+                "symbol": symbol,
+                "interval": interval
+            })
+            raise
     
-    def _parse_orderbook(self, data: dict) -> Optional[OrderBook]:
-        """Parse order book from Bybit."""
-        try:
-            symbol = data.get('topic', '').split('.')[-1]
-            ob_data = data.get('data', {})
-            
-            bids = [(Decimal(p), Decimal(q)) for p, q in ob_data.get('b', [])]
-            asks = [(Decimal(p), Decimal(q)) for p, q in ob_data.get('a', [])]
-            
-            return OrderBook(
-                symbol=symbol,
-                venue="bybit",
-                timestamp=datetime.fromtimestamp(int(data.get('ts', 0)) / 1000),
-                bids=bids,
-                asks=asks
-            )
-        except Exception as e:
-            logger.error("Error parsing Bybit orderbook", error=e)
-            return None
-    
-    async def get_ohlcv(self, symbol: str, interval: str,
-                       start: Optional[datetime] = None,
-                       end: Optional[datetime] = None) -> List[OHLCV]:
-        """Fetch historical OHLCV data."""
-        if not self.session:
-            return []
-        
-        try:
-            category = "linear" if self.market_type == "linear" else "spot"
-            url = f"{self.BASE_URL}/v5/market/kline"
-            params = {
-                'category': category,
-                'symbol': symbol,
-                'interval': self._map_interval(interval),
-                'limit': 1000
-            }
-            
-            if start:
-                params['start'] = int(start.timestamp() * 1000)
-            if end:
-                params['end'] = int(end.timestamp() * 1000)
-            
-            async with self.session.get(url, params=params) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    if result.get('retCode') == 0:
-                        return [self._parse_kline(kline, symbol) for kline in result.get('result', {}).get('list', [])]
-        except Exception as e:
-            logger.error("Error fetching Bybit OHLCV", error=e)
-        
-        return []
-    
-    @staticmethod
-    def _map_interval(interval: str) -> str:
-        """Map interval to Bybit kline interval."""
-        mapping = {
-            '1m': '1', '5m': '5', '15m': '15',
-            '1h': '60', '4h': '240', '1d': 'D', '1w': 'W', '1M': 'M'
+    async def fetch_order_book(self, symbol: str, depth: int = 10) -> Dict[str, Any]:
+        """Fetch order book snapshot."""
+        params = {
+            'category': 'spot',
+            'symbol': symbol,
+            'limit': min(depth, 50)
         }
-        return mapping.get(interval, '60')
-    
-    def _parse_kline(self, kline: list, symbol: str) -> OHLCV:
-        """Parse OHLCV from Bybit kline format."""
-        return OHLCV(
-            symbol=symbol,
-            venue="bybit",
-            timestamp=datetime.fromtimestamp(int(kline[0]) / 1000),
-            open=Decimal(str(kline[1])),
-            high=Decimal(str(kline[2])),
-            low=Decimal(str(kline[3])),
-            close=Decimal(str(kline[4])),
-            volume=Decimal(str(kline[5]))
-        )
-    
-    async def get_order_book(self, symbol: str, depth: int = 20) -> OrderBook:
-        """Get current order book snapshot."""
-        if not self.session:
-            return OrderBook(symbol=symbol, venue="bybit", bids=[], asks=[])
         
         try:
-            category = "linear" if self.market_type == "linear" else "spot"
-            url = f"{self.BASE_URL}/v5/market/orderbook"
-            params = {'category': category, 'symbol': symbol, 'limit': min(depth, 500)}
+            response = await self.http.get('/v5/market/orderbook', params=params)
+            data = response.get('result', {})
             
-            async with self.session.get(url, params=params) as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    if result.get('retCode') == 0:
-                        data = result.get('result', {})
-                        bids = [(Decimal(p), Decimal(q)) for p, q in data.get('b', [])]
-                        asks = [(Decimal(p), Decimal(q)) for p, q in data.get('a', [])]
-                        
-                        return OrderBook(
-                            symbol=symbol,
-                            venue="bybit",
-                            timestamp=datetime.utcnow(),
-                            bids=bids,
-                            asks=asks
-                        )
+            return {
+                'symbol': symbol,
+                'venue': 'bybit',
+                'timestamp': datetime.fromtimestamp(int(data['ts']) / 1000, tz=timezone.utc),
+                'bids': [[Decimal(p), Decimal(s)] for p, s in data['b']],
+                'asks': [[Decimal(p), Decimal(s)] for p, s in data['a']]
+            }
         except Exception as e:
-            logger.error("Error fetching Bybit order book", error=e)
+            self.logger.error("Failed to fetch order book", error=e, context={
+                "symbol": symbol
+            })
+            raise
+    
+    async def _handle_ws_message(self, message: str) -> None:
+        """Handle WebSocket messages."""
+        try:
+            data = json.loads(message)
+            topic = data.get('topic', '')
+            
+            # Book ticker (quotes)
+            if topic.startswith('bookticker.'):
+                ticker_data = data['data']
+                quote = Quote(
+                    symbol=ticker_data['s'],
+                    venue="bybit",
+                    timestamp=datetime.fromtimestamp(int(ticker_data['ts']) / 1000, tz=timezone.utc),
+                    bid_price=Decimal(ticker_data['bp']),
+                    bid_size=Decimal(ticker_data['bq']),
+                    ask_price=Decimal(ticker_data['ap']),
+                    ask_size=Decimal(ticker_data['aq'])
+                )
+                await self._emit_quote(quote)
+            
+            # Public trade
+            elif topic.startswith('publicTrade.'):
+                for trade_data in data['data']:
+                    trade = Trade(
+                        trade_id=trade_data['i'],
+                        symbol=trade_data['s'],
+                        venue="bybit",
+                        timestamp=datetime.fromtimestamp(int(trade_data['T']) / 1000, tz=timezone.utc),
+                        side="buy" if trade_data['S'] == 'Buy' else "sell",
+                        price=Decimal(trade_data['p']),
+                        quantity=Decimal(trade_data['v'])
+                    )
+                    await self._emit_trade(trade)
         
-        return OrderBook(symbol=symbol, venue="bybit", bids=[], asks=[])
+        except Exception as e:
+            self.logger.error("Error processing WebSocket message", error=e, context={
+                "message": message[:200]
+            })
+    
+    async def _handle_ws_error(self, error: Exception) -> None:
+        """Handle WebSocket errors."""
+        self.logger.error("WebSocket error", error=error)
+        self._connected = False
+        await self._reconnect_loop()
+    
+    async def _handle_ws_close(self) -> None:
+        """Handle WebSocket closure."""
+        self.logger.warning("WebSocket connection closed")
+        self._connected = False
+        await self._reconnect_loop()
+    
+    def _convert_interval(self, interval: str) -> str:
+        """Convert standard interval to Bybit format."""
+        mapping = {
+            '1m': '1', '5m': '5', '15m': '15', '30m': '30',
+            '1h': '60', '4h': '240', '1d': 'D', '1w': 'W'
+        }
+        return mapping.get(interval, '1')

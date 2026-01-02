@@ -1,111 +1,135 @@
 """Abstract base collector for market data."""
 from abc import ABC, abstractmethod
-from typing import List, Optional, Callable, Any
+from typing import List, Optional, Callable, Dict, Any
 from datetime import datetime
-from decimal import Decimal
 import asyncio
 
-from ..models import Quote, Trade, OHLCV, OrderBook
+from ...core.models import Quote, Trade, OHLCV
 from ...core.logging.structured_logger import get_logger
 
 
-logger = get_logger(__name__)
-
-
 class BaseCollector(ABC):
-    """Abstract base collector for exchange data."""
+    """Abstract base class for exchange data collectors."""
     
-    def __init__(self, name: str, venue: str, symbols: List[str], 
-                 api_key: Optional[str] = None, api_secret: Optional[str] = None):
+    def __init__(self, name: str, config: Dict[str, Any]):
         self.name = name
-        self.venue = venue
-        self.symbols = symbols
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.is_connected = False
-        self._callbacks: List[Callable] = []
-        self._error_count = 0
-        self._max_consecutive_errors = 5
+        self.config = config
+        self.logger = get_logger(f"collector.{name}")
+        self._connected = False
+        self._reconnect_attempts = 0
+        self._max_reconnect_attempts = config.get('retry_attempts', 5)
+        self._reconnect_delay = 5
+        self._callbacks: Dict[str, List[Callable]] = {
+            'quote': [],
+            'trade': [],
+            'ohlcv': []
+        }
     
     @abstractmethod
-    async def connect(self) -> bool:
-        """Connect to data source."""
+    async def connect(self) -> None:
+        """Establish connection to exchange."""
         pass
     
     @abstractmethod
     async def disconnect(self) -> None:
-        """Disconnect from data source."""
+        """Close connection to exchange."""
         pass
     
     @abstractmethod
-    async def subscribe_quotes(self, symbols: Optional[List[str]] = None) -> None:
-        """Subscribe to quote updates."""
+    async def subscribe_quotes(self, symbols: List[str]) -> None:
+        """Subscribe to real-time quote updates."""
         pass
     
     @abstractmethod
-    async def subscribe_trades(self, symbols: Optional[List[str]] = None) -> None:
-        """Subscribe to trade updates."""
+    async def subscribe_trades(self, symbols: List[str]) -> None:
+        """Subscribe to real-time trade updates."""
         pass
     
     @abstractmethod
-    async def subscribe_orderbook(self, symbols: Optional[List[str]] = None, 
-                                  depth: int = 20) -> None:
-        """Subscribe to order book updates."""
-        pass
-    
-    @abstractmethod
-    async def get_ohlcv(self, symbol: str, interval: str, 
-                       start: Optional[datetime] = None,
-                       end: Optional[datetime] = None) -> List[OHLCV]:
+    async def fetch_ohlcv(self, symbol: str, interval: str, 
+                          start: Optional[datetime] = None,
+                          end: Optional[datetime] = None,
+                          limit: int = 1000) -> List[OHLCV]:
         """Fetch historical OHLCV data."""
         pass
     
     @abstractmethod
-    async def get_order_book(self, symbol: str, depth: int = 20) -> OrderBook:
-        """Get current order book."""
+    async def fetch_order_book(self, symbol: str, depth: int = 10) -> Dict[str, Any]:
+        """Fetch order book snapshot."""
         pass
     
-    def subscribe_callback(self, callback: Callable[[Any], None]) -> None:
-        """Register callback for data updates."""
-        self._callbacks.append(callback)
+    def register_callback(self, event_type: str, callback: Callable) -> None:
+        """Register callback for market data events."""
+        if event_type in self._callbacks:
+            self._callbacks[event_type].append(callback)
+            self.logger.debug(f"Registered {event_type} callback", {
+                "callback": callback.__name__
+            })
     
-    async def _emit_data(self, data: Any) -> None:
-        """Emit data to all registered callbacks."""
-        for callback in self._callbacks:
+    async def _emit_quote(self, quote: Quote) -> None:
+        """Emit quote to all registered callbacks."""
+        for callback in self._callbacks['quote']:
             try:
-                if asyncio.iscoroutinefunction(callback):
-                    await callback(data)
-                else:
-                    callback(data)
+                await callback(quote)
             except Exception as e:
-                logger.error(f"Callback error in {self.name}", error=e)
+                self.logger.error(f"Quote callback error", error=e, context={
+                    "callback": callback.__name__,
+                    "symbol": quote.symbol
+                })
     
-    async def _handle_error(self, error: Exception) -> None:
-        """Handle connection error with retry logic."""
-        self._error_count += 1
-        logger.error(
-            f"Collector error in {self.name} ({self._error_count}/{self._max_consecutive_errors})",
-            context={"venue": self.venue, "error_type": type(error).__name__},
-            error=error
-        )
+    async def _emit_trade(self, trade: Trade) -> None:
+        """Emit trade to all registered callbacks."""
+        for callback in self._callbacks['trade']:
+            try:
+                await callback(trade)
+            except Exception as e:
+                self.logger.error(f"Trade callback error", error=e, context={
+                    "callback": callback.__name__,
+                    "symbol": trade.symbol
+                })
+    
+    async def _emit_ohlcv(self, ohlcv: OHLCV) -> None:
+        """Emit OHLCV to all registered callbacks."""
+        for callback in self._callbacks['ohlcv']:
+            try:
+                await callback(ohlcv)
+            except Exception as e:
+                self.logger.error(f"OHLCV callback error", error=e, context={
+                    "callback": callback.__name__,
+                    "symbol": ohlcv.symbol
+                })
+    
+    async def _reconnect_loop(self) -> None:
+        """Fault-tolerant reconnection logic."""
+        while self._reconnect_attempts < self._max_reconnect_attempts:
+            self._reconnect_attempts += 1
+            delay = self._reconnect_delay * (2 ** (self._reconnect_attempts - 1))
+            
+            self.logger.warning(f"Reconnecting to {self.name}", {
+                "attempt": self._reconnect_attempts,
+                "max_attempts": self._max_reconnect_attempts,
+                "delay": delay
+            })
+            
+            await asyncio.sleep(delay)
+            
+            try:
+                await self.connect()
+                self._reconnect_attempts = 0
+                self.logger.info(f"Reconnected to {self.name}")
+                return
+            except Exception as e:
+                self.logger.error(f"Reconnection failed", error=e, context={
+                    "attempt": self._reconnect_attempts
+                })
         
-        if self._error_count >= self._max_consecutive_errors:
-            logger.critical(
-                f"Max consecutive errors reached in {self.name}. Circuit breaker activated.",
-                context={"venue": self.venue}
-            )
-            await self.disconnect()
-            self.is_connected = False
+        self.logger.critical(f"Max reconnection attempts reached for {self.name}")
     
-    def _reset_error_count(self) -> None:
-        """Reset error counter on successful operation."""
-        if self._error_count > 0:
-            logger.info(
-                f"Error count reset for {self.name}",
-                context={"venue": self.venue, "previous_errors": self._error_count}
-            )
-            self._error_count = 0
+    @property
+    def is_connected(self) -> bool:
+        """Check if collector is connected."""
+        return self._connected
     
     async def health_check(self) -> bool:
-        """Check if collector is healthy."""
-        return self.is_connected and self._error_count < self._max_consecutive_errors
+        """Perform health check."""
+        return self._connected
