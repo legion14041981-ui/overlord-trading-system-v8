@@ -1,3 +1,1 @@
-"""
-Test suite for Overlord v8.1
-"""
+"""Test suite for Overlord Trading System v9."""
