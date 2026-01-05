@@ -1,14 +1,21 @@
-"""Authentication and security module."""
-from .jwt_handler import create_access_token, verify_token, get_current_user
-from .password import get_password_hash, verify_password
-from .dependencies import require_auth, require_superuser
+"""
+Authentication and security module.
+
+Exports:
+- grail_agent: главный агент безопасности
+- token_validator: валидация токенов
+- permissions: управление разрешениями
+"""
+
+from .grail_agent import GrailAgent, get_grail_agent
+from .token_validator import TokenValidator
+from .permissions import PermissionManager
 
 __all__ = [
-    "create_access_token",
-    "verify_token",
-    "get_current_user",
-    "get_password_hash",
-    "verify_password",
-    "require_auth",
-    "require_superuser",
+    "GrailAgent",
+    "get_grail_agent",
+    "TokenValidator",
+    "PermissionManager",
 ]
+
+__version__ = "1.0.0"
