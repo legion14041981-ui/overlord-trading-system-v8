@@ -1,4 +1,5 @@
-"""Analytics Module for Portfolio Performance and Reporting.
+"""
+Analytics Module for Portfolio Performance and Reporting.
 
 Provides comprehensive portfolio analytics capabilities:
 - Performance analysis and metrics calculation
@@ -7,12 +8,14 @@ Provides comprehensive portfolio analytics capabilities:
 - Risk-adjusted return analysis
 """
 
-from .performance_analyzer import PerformanceAnalyzer
-from .metrics_calculator import MetricsCalculator
-from .report_generator import ReportGenerator
+from .metrics import MetricsCollector
+from .reporter import ReportGenerator
+from .dashboards import DashboardAPI
 
 __all__ = [
-    "PerformanceAnalyzer",
-    "MetricsCalculator",
+    "MetricsCollector",
     "ReportGenerator",
+    "DashboardAPI",
 ]
+
+__version__ = "1.0.0"
