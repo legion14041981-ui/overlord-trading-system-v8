@@ -1,0 +1,61 @@
+# OVERLORD Trading System v8 - Production Configuration
+
+overlord:
+  version: "8.0.0"
+  mode: "conservative"
+  environment: "production"
+  log_level: "WARNING"
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 8
+  cors_enabled: false
+  cors_origins: []
+
+auth:
+  token_ttl: 1800
+  require_mfa: true
+  grail_enabled: true
+
+trading:
+  enabled: true
+  engine: "binance"
+  max_positions: 5
+  risk_limit: 0.01
+  stop_loss_pct: 0.03
+  take_profit_pct: 0.08
+
+analytics:
+  enabled: true
+  metrics_retention_days: 90
+  dashboard_refresh_seconds: 10
+
+logging:
+  level: "WARNING"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "/var/log/overlord/overlord.log"
+  max_size_mb: 500
+  backup_count: 10
+
+database:
+  type: "postgresql"
+  host: "db.example.com"
+  port: 5432
+  username: "overlord_prod"
+  # password should be in environment variables
+  database: "overlord_production"
+
+redis:
+  enabled: true
+  host: "redis.example.com"
+  port: 6379
+  db: 0
+
+notifications:
+  telegram:
+    enabled: true
+    # bot_token and chat_id in environment variables
+  email:
+    enabled: true
+    # SMTP config in environment variables

@@ -1,0 +1,67 @@
+# OVERLORD Trading System v8 - Default Configuration
+
+overlord:
+  version: "8.0.0"
+  mode: "standard"  # dry-run, conservative, standard, aggressive
+  environment: "development"
+  log_level: "INFO"
+
+api:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  cors_enabled: true
+  cors_origins:
+    - "*"
+
+auth:
+  token_ttl: 3600  # seconds
+  require_mfa: false
+  grail_enabled: true
+
+trading:
+  enabled: true
+  engine: "binance"  # binance, bybit, etc.
+  max_positions: 10
+  risk_limit: 0.02  # 2% per trade
+  stop_loss_pct: 0.05
+  take_profit_pct: 0.10
+
+analytics:
+  enabled: true
+  metrics_retention_days: 30
+  dashboard_refresh_seconds: 5
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/overlord.log"
+  max_size_mb: 100
+  backup_count: 5
+
+database:
+  type: "sqlite"  # sqlite, postgresql, mysql
+  path: "data/overlord.db"
+  # For PostgreSQL/MySQL:
+  # host: "localhost"
+  # port: 5432
+  # username: "overlord"
+  # password: "secret"
+  # database: "overlord_db"
+
+redis:
+  enabled: false
+  host: "localhost"
+  port: 6379
+  db: 0
+
+notifications:
+  telegram:
+    enabled: false
+    bot_token: ""
+    chat_id: ""
+  email:
+    enabled: false
+    smtp_server: ""
+    smtp_port: 587
+    from_address: ""
