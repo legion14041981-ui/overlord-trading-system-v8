@@ -1,0 +1,104 @@
+# [SEC-001, SEC-002, SEC-003] Prometheus Security Alerts
+groups:
+- name: security_alerts
+  interval: 30s
+  rules:
+  
+  # [SEC-001] Rate Limiting Alerts
+  - alert: HighRateLimitViolations
+    expr: |
+      rate(overlord_api_rate_limit_exceeded_total[5m]) > 10
+    for: 5m
+    labels:
+      severity: warning
+      component: security
+      track: SEC-001
+    annotations:
+      summary: "High rate of rate limit violations"
+      description: "Rate limit exceeded {{ $value }} times/sec for endpoint {{ $labels.endpoint }}"
+  
+  - alert: RateLimitDoSAttack
+    expr: |
+      rate(overlord_api_rate_limit_exceeded_total[1m]) > 100
+    for: 1m
+    labels:
+      severity: critical
+      component: security
+      track: SEC-001
+    annotations:
+      summary: "Possible DoS attack detected"
+      description: "Massive rate limit violations from {{ $labels.client_ip }}"
+  
+  # [SEC-002] IP Whitelisting Alerts
+  - alert: UnauthorizedIPAccess
+    expr: |
+      rate(overlord_api_unauthorized_ip_total[5m]) > 5
+    for: 5m
+    labels:
+      severity: warning
+      component: security
+      track: SEC-002
+    annotations:
+      summary: "Repeated unauthorized IP access attempts"
+      description: "IP {{ $labels.client_ip }} blocked {{ $value }} times/sec"
+  
+  - alert: IPWhitelistConfigMissing
+    expr: |
+      absent(overlord_ip_whitelist_loaded) == 1
+    for: 5m
+    labels:
+      severity: critical
+      component: security
+      track: SEC-002
+    annotations:
+      summary: "IP whitelist configuration missing"
+      description: "IP whitelist not loaded. All requests may be blocked or allowed!"
+  
+  # [SEC-003] Secret Rotation Alerts
+  - alert: SecretRotationFailed
+    expr: |
+      overlord_secret_rotation_failed > 0
+    for: 5m
+    labels:
+      severity: critical
+      component: security
+      track: SEC-003
+    annotations:
+      summary: "Secret rotation failed"
+      description: "Last secret rotation attempt failed. Manual intervention required."
+  
+  - alert: SecretRotationOverdue
+    expr: |
+      (time() - overlord_secret_last_rotation_timestamp) > (35 * 24 * 3600)
+    for: 1h
+    labels:
+      severity: warning
+      component: security
+      track: SEC-003
+    annotations:
+      summary: "Secret rotation overdue"
+      description: "Secrets haven't been rotated in {{ $value | humanizeDuration }}. Scheduled rotation may have failed."
+  
+  - alert: ExternalSecretsSyncFailed
+    expr: |
+      external_secrets_sync_calls_error > 0
+    for: 5m
+    labels:
+      severity: critical
+      component: security
+      track: SEC-003
+    annotations:
+      summary: "External Secrets Operator sync failed"
+      description: "Failed to sync secrets from AWS Secrets Manager"
+  
+  # General Security Alerts
+  - alert: SecurityMiddlewareDown
+    expr: |
+      up{job="overlord-api"} == 0
+    for: 2m
+    labels:
+      severity: critical
+      component: security
+    annotations:
+      summary: "Security middleware down"
+      description: "API gateway is down. Rate limiting and IP filtering not active!"
