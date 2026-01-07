@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "overlord.fullname" . }}-config
+  labels:
+    {{- include "overlord.labels" . | nindent 4 }}
+data:
+  ENV: {{ .Values.global.environment | quote }}
+  REGION: {{ .Values.global.region | quote }}
+  
+  {{- if .Values.postgresql.enabled }}
+  DATABASE_HOST: {{ include "overlord.fullname" . }}-postgresql
+  DATABASE_PORT: "5432"
+  DATABASE_NAME: {{ .Values.postgresql.auth.database | quote }}
+  {{- else if .Values.postgresql.external }}
+  DATABASE_HOST: {{ .Values.postgresql.external.host | quote }}
+  DATABASE_PORT: {{ .Values.postgresql.external.port | quote }}
+  DATABASE_NAME: {{ .Values.postgresql.external.database | quote }}
+  {{- end }}
+  
+  {{- if .Values.redis.enabled }}
+  REDIS_HOST: {{ include "overlord.fullname" . }}-redis-master
+  REDIS_PORT: "6379"
+  {{- end }}
