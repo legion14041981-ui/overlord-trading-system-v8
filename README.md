@@ -6,10 +6,12 @@
 [![Docker](https://img.shields.io/badge/docker-20.10+-2496ED.svg)](https://www.docker.com/)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Grail Agent](https://img.shields.io/badge/security-Grail%20Agent-green.svg)]()
+[![CI/CD](https://github.com/legion14041981-ui/overlord-trading-system-v8/actions/workflows/ci-cd-full-cycle.yml/badge.svg)](https://github.com/legion14041981-ui/overlord-trading-system-v8/actions)
+[![Deployment](https://img.shields.io/badge/deployment-automated-success.svg)](https://github.com/legion14041981-ui/overlord-trading-system-v8/actions)
 
 > Enterprise-grade autonomous trading system with multi-exchange integration, real-time risk management, and production-ready Kubernetes infrastructure.
 >
-> **NEW in v8.1**: Integrated with **Grail Agent** security layer and **Overlord Bootstrap** initialization system
+> **NEW in v8.1**: Integrated with **Grail Agent** security layer, **Overlord Bootstrap** initialization system, and **Full CI/CD Pipeline**
 
 ## 📝 Table of Contents
 
@@ -17,6 +19,7 @@
 - [Features](#features)
 - [Architecture](#architecture)
 - [Grail Agent & Overlord Bootstrap](#grail-agent--overlord-bootstrap)
+- [🚀 CI/CD Pipeline](#-cicd-pipeline) **← NEW**
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
 - [Deployment](#deployment)
@@ -39,6 +42,7 @@
 - 🚀 **Production Ready**: Kubernetes-native with auto-scaling
 - 🔐 **Secure**: Grail Agent security layer with token validation
 - ⚙️ **Modular**: Overlord Bootstrap for clean initialization
+- 🔄 **CI/CD**: Automated testing, building, and deployment pipeline
 
 ## ✨ Features
 
@@ -85,16 +89,16 @@
 │  ┌──────────┐  ┌──────────┐  ┌──────────┐                  │
 │  │  Walbi   │  │ Binance  │  │  Other   │                  │
 │  └────┬─────┘  └────┬─────┘  └────┬─────┘                  │
-└────────┴─────────────┴─────────────┴────────────────────────┘
+└────────┴─────────────┴─────────────┴─────────────────────────┘
         │             │             │
-        └─────────────┴─────────────┘
+        └─────────────┴───────────────┘
                       │
-        ┌─────────────┴─────────────┐
+        ┌─────────────┴───────────────┐
         │    NGINX Ingress          │
         │  (SSL/TLS Termination)    │
-        └─────────────┬─────────────┘
+        └─────────────┬───────────────┘
                       │
-        ┌─────────────┴─────────────┐
+        ┌─────────────┴───────────────┐
         │   Overlord Trading API    │
         │  ┌──────────────────────┐ │
         │  │ Overlord Bootstrap  │ │  ← Initialization system
@@ -180,6 +184,88 @@ if overlord.start():
     overlord.stop()
 ```
 
+---
+
+## 🚀 CI/CD Pipeline
+
+### Overview
+
+Full-cycle automated CI/CD pipeline with:
+- ✅ **9-stage pipeline**: Quality → Security → Testing → Build → Deploy
+- ✅ **Multi-environment**: Staging (auto) + Production (approval gate)
+- ✅ **Zero-downtime deployments**: Rolling updates with health checks
+- ✅ **Automatic rollback**: On health/smoke test failures
+- ✅ **Slack notifications**: Real-time deployment status
+
+### Quick Setup
+
+```bash
+# One-command automated setup
+./scripts/github-setup-automation.sh
+
+# Or dry-run first (no changes)
+./scripts/github-setup-automation.sh --dry-run
+```
+
+### Pipeline Stages
+
+```mermaid
+graph LR
+    A[Quality Gates] --> B[Security Scanning]
+    B --> C[Unit Tests]
+    C --> D[Integration Tests]
+    D --> E[E2E Tests]
+    E --> F[Docker Build]
+    F --> G[Deploy Staging]
+    G --> H[Health Checks]
+    H --> I[🚀 Production Approval]
+    I --> J[Deploy Production]
+    J --> K[Post-Deploy Verification]
+```
+
+### Deployment Workflow
+
+**Staging (Auto-deploy on `develop` branch)**:
+```bash
+git push origin develop
+# → Auto-triggers pipeline
+# → Deploys to staging
+# → Slack notification
+```
+
+**Production (Requires approval on `main` branch)**:
+```bash
+git push origin main
+# → Pipeline runs all tests
+# → Waits for approval
+# → Reviewer approves in GitHub Actions
+# → Deploys to production
+# → Slack notification
+```
+
+### Documentation
+
+- **[🚀 Quick Start Guide](docs/deployment/QUICK_START_CI_CD.md)** - Setup in 15 minutes
+- **[Setup Guide](docs/deployment/github-actions-setup.md)** - Detailed configuration
+- **[Setup Checklist](docs/deployment/setup-checklist.md)** - Interactive checklist
+- **[Production Deployment](docs/deployment/production-deployment.md)** - SOP for production
+- **[Secrets Template](docs/deployment/secrets-template.env)** - Security best practices
+
+### Monitoring
+
+```bash
+# Watch workflow in real-time
+gh run watch
+
+# View latest runs
+gh run list --limit 10
+
+# Check deployment status
+kubectl rollout status deployment/overlord -n overlord-production
+```
+
+---
+
 ## 📦 Prerequisites
 
 ### Local Development
@@ -196,6 +282,13 @@ if overlord.start():
 - EKS cluster (or ability to create one)
 - RDS PostgreSQL instance
 - ElastiCache Redis cluster
+
+### CI/CD Setup
+
+- GitHub repository admin access
+- Kubernetes cluster credentials (staging + production)
+- Slack webhook (optional, for notifications)
+- GitHub CLI (`gh`) installed
 
 ## 🚀 Quick Start
 
@@ -283,7 +376,26 @@ See `config/default.yaml` for full configuration options.
 
 ## 🌐 Deployment
 
-### Infrastructure Provisioning
+### Automated CI/CD Deployment (Recommended)
+
+**First-time setup**:
+```bash
+# Run automated setup wizard
+./scripts/github-setup-automation.sh
+```
+
+**Regular deployments**:
+```bash
+# Deploy to staging
+git push origin develop
+
+# Deploy to production (with approval)
+git push origin main
+```
+
+See [Quick Start CI/CD Guide](docs/deployment/QUICK_START_CI_CD.md) for detailed instructions.
+
+### Manual Infrastructure Provisioning
 
 ```bash
 # Initialize Terraform
@@ -297,10 +409,10 @@ terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
-### Kubernetes Deployment
+### Manual Kubernetes Deployment
 
 ```bash
-# Using Helm (Recommended)
+# Using Helm
 helm install overlord helm/overlord/ \
   --namespace overlord-production \
   --create-namespace \
@@ -330,6 +442,7 @@ kubectl port-forward -n overlord-monitoring svc/prometheus-grafana 3000:80
 - **Trading Volume**: Orders executed per minute
 - **Grail Agent**: Token validation rate, active sessions
 - **Overlord Status**: Module health, initialization time
+- **CI/CD**: Deployment frequency, success rate, duration
 
 ### Health Endpoints
 
@@ -339,6 +452,9 @@ curl http://localhost:8000/health
 
 # Detailed status (includes Overlord + Grail)
 curl http://localhost:8000/api/v1/status
+
+# CI/CD pipeline status
+gh run list --limit 10
 ```
 
 ## 📚 Documentation
@@ -347,16 +463,31 @@ curl http://localhost:8000/api/v1/status
 
 ```
 .
-├── .github/              # GitHub workflows
+├── .github/              # GitHub workflows & CI/CD
+│   └── workflows/
+│       └── ci-cd-full-cycle.yml
 ├── config/               # Configuration files
 │   ├── default.yaml
 │   └── production.yaml
 ├── docs/                 # Documentation
+│   ├── deployment/
+│   │   ├── QUICK_START_CI_CD.md
+│   │   ├── github-actions-setup.md
+│   │   ├── setup-checklist.md
+│   │   ├── production-deployment.md
+│   │   └── secrets-template.env
+│   └── ...
 ├── helm/                 # Helm charts
 ├── k8s/                  # Kubernetes manifests
+├── scripts/              # Automation scripts
+│   ├── setup-ci-cd.sh
+│   ├── github-setup-automation.sh
+│   ├── validate-secrets.sh
+│   ├── pre-deployment-checks.sh
+│   └── smoke-tests.sh
 ├── src/                  # Application source
-│   ├── analytics/        # Analytics module
-│   ├── api/              # API routes & middleware
+│   ├── analytics/
+│   ├── api/
 │   ├── auth/             # Auth & Grail Agent
 │   │   ├── grail_agent.py
 │   │   ├── token_validator.py
@@ -397,6 +528,14 @@ curl http://localhost:8000/api/v1/status
 - **Testing**: Pytest with >80% coverage
 - **Commit Messages**: Conventional Commits format
 
+### CI/CD for Contributions
+
+All pull requests automatically trigger:
+- Quality gates (linting, formatting)
+- Security scanning
+- Unit + integration tests
+- Docker build verification
+
 ## 🔐 Security
 
 ### Reporting Vulnerabilities
@@ -411,6 +550,7 @@ Please report security vulnerabilities via GitHub Security Advisories.
 - ✅ Audit logging
 - ✅ Container scanning (Trivy)
 - ✅ Dependency scanning (Snyk)
+- ✅ Automated security updates (Dependabot)
 
 ## 📝 License
 
@@ -423,18 +563,21 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Initialized by Overlord Bootstrap
 - Deployed on [Kubernetes](https://kubernetes.io/)
 - Monitored with [Prometheus](https://prometheus.io/) & [Grafana](https://grafana.com/)
+- Automated with [GitHub Actions](https://github.com/features/actions)
 
 ## 📦 Support
 
 - **GitHub Issues**: [Report bugs or request features](https://github.com/legion14041981-ui/overlord-trading-system-v8/issues)
+- **GitHub Actions**: [View CI/CD pipeline](https://github.com/legion14041981-ui/overlord-trading-system-v8/actions)
 - **Repository Owner**: [legion14041981-ui](https://github.com/legion14041981-ui)
 
 ---
 
 **Built with ❤️ by LEGION**  
 **Version**: 8.1.0  
-**Last Updated**: January 5, 2026
+**Last Updated**: January 7, 2026
 
 ✅ **Grail Agent Security Layer Active**  
 ✅ **Overlord Bootstrap Initialized**  
+✅ **CI/CD Pipeline Configured**  
 ✅ **Production Ready**
