@@ -1,137 +1,136 @@
-# [DEP-002] Values для Production окружения
-# Максимальная отказоустойчивость и безопасность
+# ============================================
+# OVERLORD v8.1 - Production Environment Values
+# ============================================
 
-global:
-  environment: production
-  region: us-east-1
+replicaCount: 3
 
 image:
-  registry: 123456789012.dkr.ecr.us-east-1.amazonaws.com
-  repository: overlord-api
-  tag: ""  # Использует Chart.AppVersion
+  repository: ghcr.io/legion14041981-ui/overlord-trading-system-v8
   pullPolicy: IfNotPresent
-
-replicaCount: 5
+  # tag: set by CI/CD pipeline
 
 strategy:
   type: RollingUpdate
   rollingUpdate:
-    maxSurge: 2
-    maxUnavailable: 0  # Zero-downtime deployment
+    maxSurge: 1
+    maxUnavailable: 0
 
 resources:
   limits:
-    cpu: 4000m
-    memory: 4Gi
+    cpu: 2000m
+    memory: 2Gi
   requests:
     cpu: 1000m
     memory: 1Gi
 
 autoscaling:
   enabled: true
-  minReplicas: 5
-  maxReplicas: 20
+  minReplicas: 3
+  maxReplicas: 10
   targetCPUUtilizationPercentage: 60
   targetMemoryUtilizationPercentage: 70
   behavior:
     scaleDown:
-      stabilizationWindowSeconds: 600  # 10 минут перед scale-down
+      stabilizationWindowSeconds: 300
       policies:
-      - type: Percent
-        value: 25
-        periodSeconds: 120
-      - type: Pods
-        value: 1
-        periodSeconds: 120
+        - type: Percent
+          value: 50
+          periodSeconds: 60
     scaleUp:
       stabilizationWindowSeconds: 0
       policies:
-      - type: Percent
-        value: 100
-        periodSeconds: 15
-      - type: Pods
-        value: 4
-        periodSeconds: 15
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+
+env:
+  - name: ENVIRONMENT
+    value: "production"
+  - name: LOG_LEVEL
+    value: "INFO"
+  - name: ENABLE_DEBUG
+    value: "false"
+  - name: DATABASE_URL
+    valueFrom:
+      secretKeyRef:
+        name: overlord-secrets
+        key: database-url
+  - name: REDIS_URL
+    valueFrom:
+      secretKeyRef:
+        name: overlord-secrets
+        key: redis-url
+  - name: SENTRY_DSN
+    valueFrom:
+      secretKeyRef:
+        name: overlord-secrets
+        key: sentry-dsn
 
 podDisruptionBudget:
   enabled: true
-  minAvailable: 4  # Всегда 4+ пода доступны
+  minAvailable: 2
 
 ingress:
   enabled: true
   className: nginx
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/rate-limit: "1000"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
-    nginx.ingress.kubernetes.io/rate-limit: "1000"
-    nginx.ingress.kubernetes.io/limit-rps: "100"
-    nginx.ingress.kubernetes.io/proxy-body-size: "20m"
-    nginx.ingress.kubernetes.io/cors-allow-origin: "https://legion.ai"
   hosts:
-    - host: overlord.legion.ai
+    - host: overlord-trading.com
+      paths:
+        - path: /
+          pathType: Prefix
+    - host: api.overlord-trading.com
       paths:
         - path: /
           pathType: Prefix
   tls:
     - secretName: overlord-production-tls
       hosts:
-        - overlord.legion.ai
+        - overlord-trading.com
+        - api.overlord-trading.com
 
-env:
-  - name: ENV
-    value: production
-  - name: LOG_LEVEL
-    value: info
-  - name: PYTHONUNBUFFERED
-    value: "1"
-
-# Используем внешний RDS
 postgresql:
-  enabled: false
-  external:
-    host: overlord-prod.abcdef.us-east-1.rds.amazonaws.com
-    port: 5432
-    database: overlord
-    username: overlord
+  enabled: false  # Use external managed database
+  # External connection via secret
 
-# Используем внешний ElastiCache
 redis:
-  enabled: false
-  external:
-    host: overlord-prod.cache.amazonaws.com
-    port: 6379
+  enabled: false  # Use external managed Redis
+  # External connection via secret
 
 serviceMonitor:
   enabled: true
-  interval: 30s
+  interval: 15s
   scrapeTimeout: 10s
 
 networkPolicy:
-  enabled: true  # Обязательно в production
+  enabled: true
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 5432  # PostgreSQL
+        - protocol: TCP
+          port: 6379  # Redis
+    - to:
+        - podSelector: {}
 
-serviceAccount:
-  create: true
-  annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/overlord-production
-
-# Anti-affinity для разнесения по зонам
-affinity:
-  podAntiAffinity:
-    requiredDuringSchedulingIgnoredDuringExecution:
-    - labelSelector:
-        matchExpressions:
-        - key: app.kubernetes.io/name
-          operator: In
-          values:
-          - overlord
-      topologyKey: topology.kubernetes.io/zone
-  nodeAffinity:
-    requiredDuringSchedulingIgnoredDuringExecution:
-      nodeSelectorTerms:
-      - matchExpressions:
-        - key: node.kubernetes.io/instance-type
-          operator: In
-          values:
-          - c6i.xlarge
-          - c6i.2xlarge
+backup:
+  enabled: true
+  schedule: "0 2 * * *"  # Daily at 2 AM
+  retention: 30  # days
