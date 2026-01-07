@@ -1,0 +1,37 @@
+# [DEP-002] Helm Chart для OVERLORD v8
+apiVersion: v2
+name: overlord
+description: OVERLORD v8 Autonomous Trading System
+type: application
+version: 8.1.0
+appVersion: "8.1.0"
+
+keywords:
+  - trading
+  - autonomous
+  - fintech
+  - crypto
+
+maintainers:
+  - name: LEGION Team
+    email: overlord@legion.ai
+    url: https://github.com/legion14041981-ui
+
+sources:
+  - https://github.com/legion14041981-ui/overlord-trading-system-v8
+
+icon: https://raw.githubusercontent.com/legion14041981-ui/overlord-trading-system-v8/main/docs/assets/logo.png
+
+engine: gotpl
+
+dependencies: []
+
+annotations:
+  artifacthub.io/license: MIT
+  artifacthub.io/changes: |
+    - kind: added
+      description: Initial Helm chart release
+    - kind: added
+      description: Full production-ready configuration
+    - kind: added
+      description: HPA, PDB, NetworkPolicy support
