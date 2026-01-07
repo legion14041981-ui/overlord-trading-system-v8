@@ -1,0 +1,27 @@
+# [SEC-002] IP Whitelist Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ip-whitelist
+  namespace: overlord
+  labels:
+    app: overlord-api
+    security: ip-filter
+data:
+  allowed_ips.json: |
+    {
+      "admin_panel": [
+        "203.0.113.0/24",
+        "192.0.2.50",
+        "198.51.100.0/22"
+      ],
+      "trading_api": [
+        "198.51.100.0/24",
+        "203.0.113.100"
+      ],
+      "internal_services": [
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16"
+      ]
+    }
