@@ -1,0 +1,116 @@
+name: ↩️ Rollback Deployment
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to rollback'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      revision:
+        description: 'Revision to rollback to (0 for previous)'
+        required: false
+        default: '0'
+      reason:
+        description: 'Reason for rollback'
+        required: true
+        type: string
+
+env:
+  HELM_RELEASE_NAME: overlord
+
+jobs:
+  rollback:
+    name: ↩️ Execute Rollback
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: ${{ github.event.inputs.environment }}
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.14.0'
+
+      - name: ☸️ Set up Kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: 🔐 Configure Kubernetes Context
+        run: |
+          if [[ "${{ github.event.inputs.environment }}" == "production" ]]; then
+            echo "${{ secrets.KUBECONFIG_PRODUCTION }}" | base64 -d > kubeconfig
+          else
+            echo "${{ secrets.KUBECONFIG_STAGING }}" | base64 -d > kubeconfig
+          fi
+          export KUBECONFIG=./kubeconfig
+          kubectl cluster-info
+
+      - name: 📋 Get Current Deployment Info
+        env:
+          KUBECONFIG: ./kubeconfig
+        run: |
+          NAMESPACE="overlord-${{ github.event.inputs.environment }}"
+          
+          echo "## Current Deployment Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          helm list -n $NAMESPACE >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          helm history ${{ env.HELM_RELEASE_NAME }} -n $NAMESPACE >> $GITHUB_STEP_SUMMARY
+
+      - name: ↩️ Execute Rollback
+        env:
+          KUBECONFIG: ./kubeconfig
+        run: |
+          NAMESPACE="overlord-${{ github.event.inputs.environment }}"
+          REVISION="${{ github.event.inputs.revision }}"
+          
+          if [[ "$REVISION" == "0" ]]; then
+            echo "Rolling back to previous revision..."
+            helm rollback ${{ env.HELM_RELEASE_NAME }} -n $NAMESPACE --wait --timeout 10m
+          else
+            echo "Rolling back to revision $REVISION..."
+            helm rollback ${{ env.HELM_RELEASE_NAME }} $REVISION -n $NAMESPACE --wait --timeout 10m
+          fi
+
+      - name: ✅ Verify Rollback
+        env:
+          KUBECONFIG: ./kubeconfig
+        run: |
+          NAMESPACE="overlord-${{ github.event.inputs.environment }}"
+          
+          kubectl rollout status deployment/overlord -n $NAMESPACE
+          kubectl get pods -n $NAMESPACE -l app=overlord
+          
+          echo "## Rollback Completed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ github.event.inputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Reason:** ${{ github.event.inputs.reason }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Executed by:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: 📧 Send Notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              text: "↩️ Rollback Executed",
+              attachments: [{
+                color: 'warning',
+                text: `Environment: ${{ github.event.inputs.environment }}\nReason: ${{ github.event.inputs.reason }}`,
+                fields: [
+                  { title: 'Executed by', value: '${{ github.actor }}', short: true },
+                  { title: 'Revision', value: '${{ github.event.inputs.revision }}', short: true }
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

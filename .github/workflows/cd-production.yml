@@ -1,0 +1,409 @@
+name: 🚢 CD - Production Deployment
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target Environment'
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+      deployment_strategy:
+        description: 'Deployment Strategy'
+        required: true
+        type: choice
+        default: 'rolling'
+        options:
+          - rolling
+          - blue-green
+          - canary
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  HELM_RELEASE_NAME: overlord
+
+jobs:
+  # ============================================
+  # JOB 1: Prepare Release
+  # ============================================
+  prepare-release:
+    name: 📦 Prepare Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      environment: ${{ steps.env.outputs.environment }}
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 🏷️ Extract Version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            VERSION=${GITHUB_REF#refs/tags/v}
+          else
+            VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "0.0.1")
+            VERSION=${VERSION#v}
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: 🎯 Determine Environment
+        id: env
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            ENV="${{ github.event.inputs.environment }}"
+          else
+            ENV="production"
+          fi
+          echo "environment=$ENV" >> $GITHUB_OUTPUT
+          echo "Target Environment: $ENV"
+
+      - name: 📋 Release Notes
+        run: |
+          echo "## 🚀 Release v${{ steps.version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Environment:** ${{ steps.env.outputs.environment }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Strategy:** ${{ github.event.inputs.deployment_strategy || 'rolling' }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          git log --pretty=format:"- %s (%an)" HEAD~10..HEAD >> $GITHUB_STEP_SUMMARY || true
+
+  # ============================================
+  # JOB 2: Build & Push Production Image
+  # ============================================
+  build-production:
+    name: 🏗️ Build Production Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [prepare-release]
+    
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🔐 Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🏗️ Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: 🏗️ Build & Push Multi-Platform Image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./docker/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare-release.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ needs.prepare-release.outputs.version }}
+            BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            GIT_COMMIT=${{ github.sha }}
+
+      - name: 🔍 Final Security Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.prepare-release.outputs.version }}
+          format: 'table'
+          severity: 'CRITICAL,HIGH'
+          exit-code: '1'
+
+  # ============================================
+  # JOB 3: Deploy to Staging
+  # ============================================
+  deploy-staging:
+    name: 🎯 Deploy to Staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [prepare-release, build-production]
+    if: needs.prepare-release.outputs.environment == 'staging' || needs.prepare-release.outputs.environment == 'production'
+    environment:
+      name: staging
+      url: https://staging.overlord-trading.com
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.14.0'
+
+      - name: ☸️ Set up Kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: 🔐 Configure Kubernetes Context
+        run: |
+          echo "${{ secrets.KUBECONFIG_STAGING }}" | base64 -d > kubeconfig
+          export KUBECONFIG=./kubeconfig
+          kubectl cluster-info
+
+      - name: 🚀 Deploy with Helm
+        env:
+          KUBECONFIG: ./kubeconfig
+        run: |
+          helm upgrade --install ${{ env.HELM_RELEASE_NAME }} helm/overlord \
+            --namespace overlord-staging \
+            --create-namespace \
+            --values helm/overlord/values-staging.yaml \
+            --set image.tag=${{ needs.prepare-release.outputs.version }} \
+            --wait \
+            --timeout 10m \
+            --atomic
+
+      - name: 🧪 Smoke Tests
+        run: |
+          export KUBECONFIG=./kubeconfig
+          kubectl wait --for=condition=ready pod \
+            -l app=overlord \
+            -n overlord-staging \
+            --timeout=5m
+          
+          # Health check
+          kubectl run test-curl --image=curlimages/curl:latest \
+            --rm -i --restart=Never \
+            -n overlord-staging \
+            -- curl -f http://overlord-service/health || exit 1
+
+  # ============================================
+  # JOB 4: Integration Tests (Staging)
+  # ============================================
+  test-staging:
+    name: 🧪 Integration Tests (Staging)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [deploy-staging]
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 📦 Install Test Dependencies
+        run: |
+          pip install pytest requests
+
+      - name: 🧪 Run E2E Tests
+        env:
+          API_BASE_URL: https://staging.overlord-trading.com
+          API_KEY: ${{ secrets.STAGING_API_KEY }}
+        run: |
+          pytest tests/e2e/ -v --tb=short
+
+  # ============================================
+  # JOB 5: Deploy to Production
+  # ============================================
+  deploy-production:
+    name: 🚀 Deploy to Production
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [prepare-release, build-production, test-staging]
+    if: needs.prepare-release.outputs.environment == 'production'
+    environment:
+      name: production
+      url: https://overlord-trading.com
+    
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
+
+      - name: 🛠️ Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: 'v3.14.0'
+
+      - name: ☸️ Set up Kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: 🔐 Configure Kubernetes Context
+        run: |
+          echo "${{ secrets.KUBECONFIG_PRODUCTION }}" | base64 -d > kubeconfig
+          export KUBECONFIG=./kubeconfig
+          kubectl cluster-info
+
+      - name: 📸 Backup Current Deployment
+        env:
+          KUBECONFIG: ./kubeconfig
+        run: |
+          helm get values ${{ env.HELM_RELEASE_NAME }} \
+            -n overlord-production \
+            > backup-values.yaml || true
+          
+          echo "BACKUP_TIMESTAMP=$(date +%s)" >> $GITHUB_ENV
+
+      - name: 🚀 Deploy with Strategy
+        env:
+          KUBECONFIG: ./kubeconfig
+          STRATEGY: ${{ github.event.inputs.deployment_strategy || 'rolling' }}
+        run: |
+          case $STRATEGY in
+            "blue-green")
+              echo "Executing Blue-Green Deployment..."
+              helm upgrade --install ${{ env.HELM_RELEASE_NAME }}-green helm/overlord \
+                --namespace overlord-production \
+                --create-namespace \
+                --values helm/overlord/values-production.yaml \
+                --set image.tag=${{ needs.prepare-release.outputs.version }} \
+                --set service.selector.version=green \
+                --wait --timeout 15m
+              
+              # Switch traffic after validation
+              kubectl patch service overlord-service \
+                -n overlord-production \
+                -p '{"spec":{"selector":{"version":"green"}}}'
+              ;;
+              
+            "canary")
+              echo "Executing Canary Deployment..."
+              helm upgrade --install ${{ env.HELM_RELEASE_NAME }}-canary helm/overlord \
+                --namespace overlord-production \
+                --values helm/overlord/values-production.yaml \
+                --set image.tag=${{ needs.prepare-release.outputs.version }} \
+                --set replicaCount=1 \
+                --wait --timeout 10m
+              
+              sleep 300  # 5 min canary period
+              
+              # Scale canary to full
+              helm upgrade ${{ env.HELM_RELEASE_NAME }}-canary helm/overlord \
+                --namespace overlord-production \
+                --reuse-values \
+                --set replicaCount=3
+              ;;
+              
+            *)
+              echo "Executing Rolling Update..."
+              helm upgrade --install ${{ env.HELM_RELEASE_NAME }} helm/overlord \
+                --namespace overlord-production \
+                --create-namespace \
+                --values helm/overlord/values-production.yaml \
+                --set image.tag=${{ needs.prepare-release.outputs.version }} \
+                --wait --timeout 15m \
+                --atomic
+              ;;
+          esac
+
+      - name: ✅ Verify Deployment
+        env:
+          KUBECONFIG: ./kubeconfig
+        run: |
+          kubectl rollout status deployment/overlord -n overlord-production
+          kubectl get pods -n overlord-production -l app=overlord
+
+      - name: 🧪 Production Smoke Tests
+        run: |
+          export KUBECONFIG=./kubeconfig
+          kubectl run prod-test-curl --image=curlimages/curl:latest \
+            --rm -i --restart=Never \
+            -n overlord-production \
+            -- curl -f http://overlord-service/health || exit 1
+
+  # ============================================
+  # JOB 6: Rollback (on failure)
+  # ============================================
+  rollback:
+    name: ↩️ Rollback Deployment
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [deploy-production]
+    if: failure()
+    environment:
+      name: production
+    
+    steps:
+      - name: 🔐 Configure Kubernetes Context
+        run: |
+          echo "${{ secrets.KUBECONFIG_PRODUCTION }}" | base64 -d > kubeconfig
+          export KUBECONFIG=./kubeconfig
+
+      - name: ↩️ Execute Rollback
+        env:
+          KUBECONFIG: ./kubeconfig
+        run: |
+          helm rollback ${{ env.HELM_RELEASE_NAME }} \
+            -n overlord-production \
+            --wait \
+            --timeout 10m
+
+      - name: 📧 Notify Failure
+        uses: 8398a7/action-slack@v3
+        if: always()
+        with:
+          status: custom
+          custom_payload: |
+            {
+              text: "🚨 Production Deployment Failed - Rollback Executed",
+              attachments: [{
+                color: 'danger',
+                text: `Deployment v${{ needs.prepare-release.outputs.version }} failed and was rolled back.`
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+  # ============================================
+  # FINAL: Notify Success
+  # ============================================
+  notify-success:
+    name: 📢 Deployment Success Notification
+    runs-on: ubuntu-latest
+    needs: [prepare-release, deploy-production]
+    if: success()
+    
+    steps:
+      - name: 📧 Slack Notification
+        uses: 8398a7/action-slack@v3
+        with:
+          status: custom
+          custom_payload: |
+            {
+              text: "✅ Production Deployment Successful",
+              attachments: [{
+                color: 'good',
+                text: `Version v${{ needs.prepare-release.outputs.version }} deployed to production`,
+                fields: [
+                  { title: 'Environment', value: 'production', short: true },
+                  { title: 'Version', value: 'v${{ needs.prepare-release.outputs.version }}', short: true },
+                  { title: 'Deployed by', value: '${{ github.actor }}', short: true }
+                ]
+              }]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+
+      - name: 📊 Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ needs.prepare-release.outputs.version }}
+          release_name: Release v${{ needs.prepare-release.outputs.version }}
+          draft: false
+          prerelease: false
