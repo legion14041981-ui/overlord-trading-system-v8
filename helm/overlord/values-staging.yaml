@@ -1,0 +1,93 @@
+# [DEP-002] Values для Staging окружения
+# Меньше ресурсов, больше логов
+
+global:
+  environment: staging
+  region: us-east-1
+
+image:
+  registry: 123456789012.dkr.ecr.us-east-1.amazonaws.com
+  repository: overlord-api
+  tag: "staging-latest"
+  pullPolicy: Always
+
+replicaCount: 2
+
+# Уменьшенные ресурсы для staging
+resources:
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 85
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-staging
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  hosts:
+    - host: overlord-staging.legion.ai
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: overlord-staging-tls
+      hosts:
+        - overlord-staging.legion.ai
+
+env:
+  - name: ENV
+    value: staging
+  - name: LOG_LEVEL
+    value: debug  # Больше логов для отладки
+  - name: DEBUG
+    value: "true"
+
+postgresql:
+  enabled: true
+  primary:
+    persistence:
+      enabled: true
+      size: 10Gi
+    resources:
+      limits:
+        cpu: 500m
+        memory: 512Mi
+      requests:
+        cpu: 100m
+        memory: 128Mi
+
+redis:
+  enabled: true
+  master:
+    persistence:
+      enabled: true
+      size: 2Gi
+    resources:
+      limits:
+        cpu: 250m
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+
+serviceMonitor:
+  enabled: true
+  interval: 15s
+
+networkPolicy:
+  enabled: false  # Отключено для упрощения отладки
