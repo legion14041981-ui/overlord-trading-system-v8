@@ -1,108 +1,146 @@
-# Docker Compose - Overlord v8.1
-# For local development and testing
+# [DEP-001] Docker Compose for Local Development
+# Spin up full OVERLORD stack locally
 
-version: '3.8'
+version: '3.9'
 
 services:
-  overlord:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: overlord-api
-    ports:
-      - "8000:8000"
-    environment:
-      - DATABASE_URL=postgresql://overlord:overlord@postgres:5432/overlord
-      - REDIS_URL=redis://redis:6379/0
-      - TRADING_ENABLED=false
-      - LOG_LEVEL=INFO
-    depends_on:
-      - postgres
-      - redis
-    networks:
-      - overlord-network
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
+  # PostgreSQL Database
   postgres:
-    image: postgres:15-alpine
+    image: postgres:16-alpine
     container_name: overlord-postgres
     environment:
-      - POSTGRES_USER=overlord
-      - POSTGRES_PASSWORD=overlord
-      - POSTGRES_DB=overlord
+      POSTGRES_USER: overlord
+      POSTGRES_PASSWORD: overlord_dev_password
+      POSTGRES_DB: overlord
     ports:
       - "5432:5432"
     volumes:
-      - postgres-data:/var/lib/postgresql/data
-    networks:
-      - overlord-network
-    restart: unless-stopped
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U overlord"]
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - overlord-net
 
+  # Redis Cache
   redis:
     image: redis:7-alpine
     container_name: overlord-redis
     ports:
       - "6379:6379"
+    command: redis-server --appendonly yes
     volumes:
-      - redis-data:/data
-    networks:
-      - overlord-network
-    restart: unless-stopped
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 3s
       retries: 5
+    networks:
+      - overlord-net
 
+  # OVERLORD API
+  api:
+    build:
+      context: .
+      target: development
+      dockerfile: Dockerfile
+    container_name: overlord-api
+    ports:
+      - "8000:8000"
+      - "9090:9090"
+    environment:
+      DATABASE_URL: postgresql://overlord:overlord_dev_password@postgres:5432/overlord
+      REDIS_URL: redis://redis:6379/0
+      LOG_LEVEL: debug
+      ENV: development
+    volumes:
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./alembic:/app/alembic
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - overlord-net
+
+  # Prometheus (Monitoring)
   prometheus:
     image: prom/prometheus:latest
     container_name: overlord-prometheus
     ports:
-      - "9090:9090"
+      - "9091:9090"
     volumes:
-      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus-data:/prometheus
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus/alerts:/etc/prometheus/alerts
+      - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+    depends_on:
+      - api
     networks:
-      - overlord-network
-    restart: unless-stopped
+      - overlord-net
 
+  # Grafana (Dashboards)
   grafana:
     image: grafana/grafana:latest
     container_name: overlord-grafana
     ports:
       - "3000:3000"
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
-      - GF_USERS_ALLOW_SIGN_UP=false
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SERVER_ROOT_URL: http://localhost:3000
     volumes:
-      - grafana-data:/var/lib/grafana
-      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
-    networks:
-      - overlord-network
-    restart: unless-stopped
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
     depends_on:
       - prometheus
+    networks:
+      - overlord-net
 
-networks:
-  overlord-network:
-    driver: bridge
+  # Jaeger (Distributed Tracing)
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: overlord-jaeger
+    ports:
+      - "5775:5775/udp"
+      - "6831:6831/udp"
+      - "6832:6832/udp"
+      - "5778:5778"
+      - "16686:16686"  # UI
+      - "14268:14268"
+      - "14250:14250"
+    environment:
+      COLLECTOR_ZIPKIN_HOST_PORT: ":9411"
+    networks:
+      - overlord-net
 
 volumes:
-  postgres-data:
-  redis-data:
-  prometheus-data:
-  grafana-data:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  overlord-net:
+    driver: bridge

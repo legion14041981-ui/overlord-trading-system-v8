@@ -1,0 +1,65 @@
+# [DEP-001] Docker Compose for Production Simulation
+# Minimal production-like setup for testing
+
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: overlord
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: overlord
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - overlord-prod
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    networks:
+      - overlord-prod
+    restart: unless-stopped
+
+  api:
+    image: ${ECR_REGISTRY}/overlord-api:${IMAGE_TAG:-latest}
+    environment:
+      DATABASE_URL: postgresql://overlord:${DB_PASSWORD}@postgres:5432/overlord
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      LOG_LEVEL: info
+      ENV: production
+    deploy:
+      replicas: 3
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - overlord-prod
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  overlord-prod:
+    driver: bridge

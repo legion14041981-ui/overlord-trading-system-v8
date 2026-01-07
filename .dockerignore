@@ -1,83 +1,93 @@
-# .dockerignore - Overlord v8.1
+# [DEP-001] Docker Ignore File
+# Exclude unnecessary files from Docker context for faster builds
 
-# Git
-.git
-.gitignore
-.gitattributes
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+PIPFILE.lock
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
 
 # CI/CD
-.github
-.gitlab
-.circleci
+.github/
+.gitlab-ci.yml
+.travis.yml
 
 # Documentation
 docs/
 *.md
 LICENSE
 
-# Tests
-tests/
-.pytest_cache/
-.coverage
-htmlcov/
+# Git
+.git/
+.gitignore
+.gitattributes
 
-# Development
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-venv/
-env/
-*.egg-info/
-
-# Environment
-.env
-.env.*
-*.env
-
-# Terraform
-terraform/
-*.tfstate
-*.tfvars
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
 
 # Kubernetes
 k8s/
 helm/
-*.yaml
-*.yml
-!alembic.ini
-
-# Monitoring
-monitoring/
-
-# Scripts (except entrypoint)
-scripts/
-!scripts/entrypoint.sh
-
-# Backups
-backups/
-*.bak
 
 # Logs
-logs/
 *.log
+logs/
 
-# Temporary
+# Environment files
+.env*
+!.env.example
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
 tmp/
 temp/
 *.tmp
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Build artifacts
-build/
-dist/
