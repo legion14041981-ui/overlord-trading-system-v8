@@ -1,23 +1,24 @@
-# src/routers/__init__.py
 """
-API Routers Package
-Пакет API маршрутов - эндпойнты для REST API
+API Routers package for Overlord Trading System v8.1
 """
-
-# Routers will be imported here as they are created
-# from src.routers.exchange import router as exchange_router
-# from src.routers.portfolio import router as portfolio_router
-# from src.routers.trades import router as trades_router
-# from src.routers.strategies import router as strategies_router
-# from src.routers.market_data import router as market_data_router
-# from src.routers.alerts import router as alerts_router
+from .auth import router as auth_router
+from .users import router as users_router
+from .strategies import router as strategies_router
+from .trades import router as trades_router
+from .analytics import router as analytics_router
+from .risk import router as risk_router
+from .monitoring import router as monitoring_router
+from .market_data import router as market_data_router
+from .system import router as system_router
 
 __all__ = [
-    # Routers (to be populated)
-    # "exchange_router",
-    # "portfolio_router",
-    # "trades_router",
-    # "strategies_router",
-    # "market_data_router",
-    # "alerts_router",
+    "auth_router",
+    "users_router",
+    "strategies_router",
+    "trades_router",
+    "analytics_router",
+    "risk_router",
+    "monitoring_router",
+    "market_data_router",
+    "system_router",
 ]
