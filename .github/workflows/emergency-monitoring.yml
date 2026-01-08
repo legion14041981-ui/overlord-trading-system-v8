@@ -253,9 +253,10 @@ jobs:
       
       - name: Create advanced scenario report
         run: |
-          cat > advanced_scenarios_report.json <<'EOF'
+          TIMESTAMP=$(date -Iseconds)
+          cat > advanced_scenarios_report.json <<EOF
           {
-            "timestamp": "$(date -Iseconds)",
+            "timestamp": "${TIMESTAMP}",
             "scenarios_tested": ["E-004", "E-005", "E-006", "E-007", "E-008", "E-009", "E-010", "E-011", "E-012"],
             "all_healthy": true,
             "critical_alerts": 0,
@@ -289,10 +290,11 @@ jobs:
       
       - name: Generate comprehensive PHASE 26 report
         run: |
-          cat > PHASE26_MONITORING_REPORT.md <<'EOF'
+          TIMESTAMP=$(date -Iseconds)
+          cat > PHASE26_MONITORING_REPORT.md <<EOF
           # PHASE 26: NOTIFICATIONS & EMERGENCY SCENARIOS - MONITORING REPORT
           
-          **Generated**: $(date -Iseconds)
+          **Generated**: ${TIMESTAMP}
           **System**: OVERLORD v8.1 CI/CD Pipeline
           **Autonomy Level**: 2.5 (Manual approval for critical operations)
           
@@ -338,7 +340,7 @@ jobs:
       
       - name: Create GitHub Summary
         run: |
-          cat >> $GITHUB_STEP_SUMMARY <<'EOF'
+          cat >> $GITHUB_STEP_SUMMARY <<EOF
           # 🚀 PHASE 26 Emergency Monitoring - Deployment Summary
           
           ## Status: ✅ OPERATIONAL
