@@ -1,18 +1,11 @@
-"""
-Services Module for Overlord v8.1 Trading System
+"""Service layer modules for Overlord Trading System."""
 
-Core business logic services for:
-- Market data management and analysis
-- Alert rule creation and triggering
-- Trade execution
-- Portfolio management
-- Risk management
-"""
-
-from src.services.market_data_service import MarketDataService
-from src.services.alert_service import AlertService
+from .notification_service import NotificationService
+from .audit_service import AuditService
+from .cache_service import CacheService
 
 __all__ = [
-    "MarketDataService",
-    "AlertService",
+    "NotificationService",
+    "AuditService",
+    "CacheService",
 ]
